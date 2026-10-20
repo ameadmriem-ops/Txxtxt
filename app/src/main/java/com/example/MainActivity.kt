@@ -1835,9 +1835,30 @@ class MainActivity : ComponentActivity() {
      */
     class AdMobBridge(private val activity: MainActivity, private val webView: WebView) {
         private val mainHandler = Handler(Looper.getMainLooper())
-        private var isLoading = false
-        private var hasHandled = false
+        // Unified Ad States: "IDLE", "LOADING", "SHOWING", "DISMISSED", "FAILED"
+        @Volatile private var adState: String = "IDLE"
+        @Volatile private var currentAttemptId: String = ""
+        @Volatile private var isLoadingAd: Boolean = false
+        @Volatile private var isShowingAd: Boolean = false
         private var timeoutRunnable: Runnable? = null
+
+        @JavascriptInterface
+        fun getAdState(): String = adState
+
+        @JavascriptInterface
+        fun isAdShowing(): Boolean = isShowingAd || adState == "SHOWING"
+
+        @JavascriptInterface
+        fun resetAdState() {
+            activity.runOnUiThread {
+                if (adState != "SHOWING" && !isShowingAd) {
+                    adState = "IDLE"
+                    isLoadingAd = false
+                    timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+                    timeoutRunnable = null
+                }
+            }
+        }
 
         private var preloadedRewardedAd: RewardedAd? = null
         private var isPreloading = false
@@ -2274,8 +2295,8 @@ class MainActivity : ComponentActivity() {
         fun preloadRewardedAd(adUnitId: String) {
             val targetUnitId = adUnitId.ifBlank { DEFAULT_REWARDED_AD_UNIT_ID }
             activity.runOnUiThread {
-                if (preloadedRewardedAd != null || isPreloading) {
-                    Log.d(TAG, "AdMob [Preload]: Rewarded Ad is already loaded or preloading in progress.")
+                if (preloadedRewardedAd != null || isPreloading || isShowingAd || adState == "SHOWING") {
+                    Log.d(TAG, "AdMob [Preload]: Rewarded Ad is already loaded, preloading, or currently SHOWING.")
                     return@runOnUiThread
                 }
 
@@ -2308,33 +2329,52 @@ class MainActivity : ComponentActivity() {
 
         @JavascriptInterface
         fun loadAndShowRewardedAd(adUnitId: String, timeoutMs: Long) {
+            loadAndShowRewardedAd(adUnitId, timeoutMs, System.currentTimeMillis().toString())
+        }
+
+        @JavascriptInterface
+        fun loadAndShowRewardedAd(adUnitId: String, timeoutMs: Long, attemptId: String) {
             val targetUnitId = adUnitId.ifBlank { DEFAULT_REWARDED_AD_UNIT_ID }
             activity.runOnUiThread {
-                if (isLoading) {
-                    Log.w(TAG, "AdMob: loadAndShowRewardedAd called while another ad is already being processed.")
+                if (isShowingAd || adState == "SHOWING") {
+                    Log.w(TAG, "AdMob: loadAndShowRewardedAd rejected because an ad is currently SHOWING.")
                     return@runOnUiThread
                 }
-                isLoading = true
-                hasHandled = false
+                if (isLoadingAd || adState == "LOADING") {
+                    Log.w(TAG, "AdMob: loadAndShowRewardedAd rejected because another request is already LOADING.")
+                    return@runOnUiThread
+                }
 
-                // If preloaded ad is already available, show it immediately!
+                currentAttemptId = attemptId
+                adState = "LOADING"
+                isLoadingAd = true
+
+                // Check preloaded ad cache first
                 val cachedAd = preloadedRewardedAd
                 if (cachedAd != null) {
-                    Log.d(TAG, "AdMob: تم العثور على إعلان مسبق التحميل، جاري العرض فوراً (Using preloaded ad directly)...")
+                    Log.d(TAG, "AdMob: Using preloaded ad directly for attempt $attemptId...")
                     preloadedRewardedAd = null
-                    showLoadedAd(cachedAd, targetUnitId)
+                    showLoadedAd(cachedAd, targetUnitId, attemptId)
                     return@runOnUiThread
                 }
 
-                // If not preloaded, initiate load with safety timeout
-                Log.d(TAG, "AdMob: بدأ التحميل (Started loading ad) with Ad Unit ID: $targetUnitId")
+                // Not preloaded -> start loading with safety search timeout
+                Log.d(TAG, "AdMob: Started loading ad for attempt $attemptId with Ad Unit ID: $targetUnitId")
                 timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+
                 val timer = Runnable {
-                    if (!hasHandled) {
-                        hasHandled = true
-                        isLoading = false
-                        Log.w(TAG, "AdMob: انتهت مهلة البحث عن الإعلان (Ad load timed out after ${timeoutMs}ms)")
-                        notifyJsResult(false, "timeout")
+                    activity.runOnUiThread {
+                        if (isShowingAd || adState == "SHOWING") {
+                            Log.d(TAG, "AdMob: Timeout ignored because an ad is currently SHOWING for attempt $attemptId")
+                            return@runOnUiThread
+                        }
+                        // Only process timeout if still in LOADING state for this specific attempt and NOT showing
+                        if (adState == "LOADING" && currentAttemptId == attemptId) {
+                            adState = "FAILED"
+                            isLoadingAd = false
+                            Log.w(TAG, "AdMob: Ad search timed out for attempt $attemptId after ${timeoutMs}ms")
+                            notifyJsResult(false, "timeout", attemptId)
+                        }
                     }
                 }
                 timeoutRunnable = timer
@@ -2344,71 +2384,104 @@ class MainActivity : ComponentActivity() {
                 RewardedAd.load(activity, targetUnitId, adRequest, object : RewardedAdLoadCallback() {
                     override fun onAdFailedToLoad(loadAdError: LoadAdError) {
                         activity.runOnUiThread {
-                            if (!hasHandled) {
-                                hasHandled = true
+                            if (isShowingAd || adState == "SHOWING") {
+                                return@runOnUiThread
+                            }
+                            if (currentAttemptId == attemptId && adState == "LOADING") {
                                 timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
-                                isLoading = false
+                                timeoutRunnable = null
+                                adState = "FAILED"
+                                isLoadingAd = false
                                 Log.e(
                                     TAG,
-                                    "AdMob: فشل التحميل (Failed to load) - Code: ${loadAdError.code}, Message: ${loadAdError.message}, Domain: ${loadAdError.domain}"
+                                    "AdMob: Failed to load ad for attempt $attemptId - Code: ${loadAdError.code}, Message: ${loadAdError.message}, Domain: ${loadAdError.domain}"
                                 )
-                                notifyJsResult(false, "load_failed")
+                                notifyJsResult(false, "load_failed", attemptId)
                             }
                         }
                     }
 
                     override fun onAdLoaded(rewardedAd: RewardedAd) {
                         activity.runOnUiThread {
-                            if (hasHandled) {
-                                Log.w(TAG, "AdMob: تم تحميل الإعلان بعد انتهاء المهلة، سيتم حفظه للإعلان القادم.")
+                            // If this attempt timed out or changed state or an ad is showing, save the ad as preloaded for next time
+                            if (currentAttemptId != attemptId || adState != "LOADING" || isShowingAd || adState == "SHOWING") {
+                                Log.w(TAG, "AdMob: Ad loaded late for attempt $attemptId (state=$adState, isShowing=$isShowingAd). Caching for next attempt.")
                                 preloadedRewardedAd = rewardedAd
                                 return@runOnUiThread
                             }
+
                             timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
-                            Log.d(TAG, "AdMob: تم تحميل الإعلان بنجاح (Ad loaded successfully). جاري عرضه...")
-                            showLoadedAd(rewardedAd, targetUnitId)
+                            timeoutRunnable = null
+                            Log.d(TAG, "AdMob: Ad loaded successfully for attempt $attemptId. Showing now...")
+                            showLoadedAd(rewardedAd, targetUnitId, attemptId)
                         }
                     }
                 })
             }
         }
 
-        private fun showLoadedAd(rewardedAd: RewardedAd, adUnitId: String) {
+        private fun showLoadedAd(rewardedAd: RewardedAd, adUnitId: String, attemptId: String) {
+            timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+            timeoutRunnable = null
+            isLoadingAd = false
+            isShowingAd = true
+            adState = "SHOWING"
+
             var userEarnedReward = false
+            var isTerminalStateHandled = false
 
             rewardedAd.fullScreenContentCallback = object : FullScreenContentCallback() {
                 override fun onAdShowedFullScreenContent() {
-                    Log.d(TAG, "AdMob: تم عرضه بنجاح على الشاشة (Ad showed full screen content / Impression)")
+                    activity.runOnUiThread {
+                        Log.d(TAG, "AdMob: onAdShowedFullScreenContent() - Ad is now SHOWING for attempt $attemptId")
+                        isShowingAd = true
+                        adState = "SHOWING"
+                        // CRITICAL: Notify JavaScript immediately that the ad is showing to stop its search timers!
+                        notifyJsAdShowed(attemptId)
+                    }
                 }
 
                 override fun onAdDismissedFullScreenContent() {
                     activity.runOnUiThread {
-                        isLoading = false
+                        Log.d(TAG, "AdMob: onAdDismissedFullScreenContent() - Ad dismissed by user for attempt $attemptId")
+                        isShowingAd = false
+                        adState = "DISMISSED"
                         activity.applyImmersiveFullScreen()
-                        Log.d(TAG, "AdMob: تم إغلاقه (Ad dismissed by user). العودة للتطبيق بشكل طبيعي.")
-                        if (!hasHandled) {
-                            hasHandled = true
-                            notifyJsResult(userEarnedReward, if (userEarnedReward) "watched" else "dismissed_early")
+
+                        if (!isTerminalStateHandled && currentAttemptId == attemptId) {
+                            isTerminalStateHandled = true
+                            notifyJsResult(userEarnedReward, if (userEarnedReward) "watched" else "dismissed_early", attemptId)
                         }
-                        // Preload the next rewarded ad in background
-                        preloadRewardedAd(adUnitId)
+
+                        // Preload the next rewarded ad in background AFTER current ad is dismissed
+                        mainHandler.postDelayed({
+                            if (!isShowingAd && adState != "SHOWING") {
+                                preloadRewardedAd(adUnitId)
+                            }
+                        }, 500)
                     }
                 }
 
                 override fun onAdFailedToShowFullScreenContent(adError: AdError) {
                     activity.runOnUiThread {
-                        isLoading = false
-                        activity.applyImmersiveFullScreen()
                         Log.e(
                             TAG,
-                            "AdMob: فشل عرض الإعلان (Failed to show full screen content) - Code: ${adError.code}, Message: ${adError.message}"
+                            "AdMob: onAdFailedToShowFullScreenContent() for attempt $attemptId - Code: ${adError.code}, Message: ${adError.message}"
                         )
-                        if (!hasHandled) {
-                            hasHandled = true
-                            notifyJsResult(false, "failed_to_show")
+                        isShowingAd = false
+                        adState = "FAILED"
+                        activity.applyImmersiveFullScreen()
+
+                        if (!isTerminalStateHandled && currentAttemptId == attemptId) {
+                            isTerminalStateHandled = true
+                            notifyJsResult(false, "failed_to_show", attemptId)
                         }
-                        // Preload the next rewarded ad in background
-                        preloadRewardedAd(adUnitId)
+
+                        mainHandler.postDelayed({
+                            if (!isShowingAd && adState != "SHOWING") {
+                                preloadRewardedAd(adUnitId)
+                            }
+                        }, 500)
                     }
                 }
             }
@@ -2418,15 +2491,17 @@ class MainActivity : ComponentActivity() {
                     userEarnedReward = true
                     Log.d(
                         TAG,
-                        "AdMob: تم استحقاق المكافأة للمستخدم (User earned reward) - Type: ${rewardItem.type}, Amount: ${rewardItem.amount}"
+                        "AdMob: User earned reward for attempt $attemptId - Type: ${rewardItem.type}, Amount: ${rewardItem.amount}"
                     )
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "AdMob: Exception while showing rewarded ad: ${e.message}", e)
-                isLoading = false
-                if (!hasHandled) {
-                    hasHandled = true
-                    notifyJsResult(false, "exception")
+                Log.e(TAG, "AdMob: Exception while showing rewarded ad for attempt $attemptId: ${e.message}", e)
+                isShowingAd = false
+                isLoadingAd = false
+                adState = "FAILED"
+                if (!isTerminalStateHandled && currentAttemptId == attemptId) {
+                    isTerminalStateHandled = true
+                    notifyJsResult(false, "exception", attemptId)
                 }
             }
         }
@@ -2438,8 +2513,13 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        private fun notifyJsResult(success: Boolean, reason: String) {
-            val script = "if(window.onAdMobRewardResult){window.onAdMobRewardResult($success, '$reason');}"
+        private fun notifyJsAdShowed(attemptId: String) {
+            val script = "if(window.onAdMobAdShowed){window.onAdMobAdShowed('$attemptId');}"
+            webView.evaluateJavascript(script, null)
+        }
+
+        private fun notifyJsResult(success: Boolean, reason: String, attemptId: String) {
+            val script = "if(window.onAdMobRewardResult){window.onAdMobRewardResult($success, '$reason', '$attemptId');}"
             webView.evaluateJavascript(script, null)
         }
     }

@@ -11292,11 +11292,33 @@ const ADMOB_CONFIG = {
   searchTimeoutMs: 9000
 };
 
+// Unified Ad States: "IDLE", "LOADING", "SHOWING", "DISMISSED", "FAILED"
+const AD_STATE = {
+  IDLE: "IDLE",
+  LOADING: "LOADING",
+  SHOWING: "SHOWING",
+  DISMISSED: "DISMISSED",
+  FAILED: "FAILED"
+};
+
+let currentAdState = AD_STATE.IDLE;
+let currentAdAttemptId = "";
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 let internalAdCount = 0;
 let isAdFlowActive = false;
 let adSearchTimeoutId = null;
 let currentAdStepResolved = false;
+
+window.getAdState = function() {
+  if (window.AndroidBridge && typeof window.AndroidBridge.getAdState === "function") {
+    try {
+      const bState = window.AndroidBridge.getAdState();
+      if (bState === "SHOWING") currentAdState = AD_STATE.SHOWING;
+      return bState;
+    } catch (_) {}
+  }
+  return currentAdState;
+};
 
 window.checkAndTriggerDailyAdMobPopup = function() {
   if (!window.currentUserRole) {
@@ -11331,6 +11353,7 @@ window.checkAndTriggerDailyAdMobPopup = function() {
     pendingFlow = localStorage.getItem("admob_flow_active") === "1";
     pendingPrompt = localStorage.getItem("admob_prompt_pending") === "1";
   } catch (_) {}
+
   if (pendingFlow) {
     window.resumePendingAdFlow();
     return;
@@ -11371,13 +11394,29 @@ window.resumePendingAdFlow = function() {
   let pending = false;
   try { pending = localStorage.getItem("admob_flow_active") === "1"; } catch (_) {}
   if (!pending) return;
+
+  // If an ad is currently SHOWING, never interrupt or restart it!
+  if (currentAdState === AD_STATE.SHOWING) return;
+  if (window.AndroidBridge && typeof window.AndroidBridge.getAdState === "function") {
+    try {
+      if (window.AndroidBridge.getAdState() === "SHOWING") {
+        currentAdState = AD_STATE.SHOWING;
+        return;
+      }
+    } catch (_) {}
+  }
+
   if (isAdFlowActive) {
     const activePopup = document.getElementById("adDailyPopup");
     const activeWatchScreen = document.getElementById("adWatchScreen");
     if (activePopup) activePopup.style.display = "none";
     if (activeWatchScreen) activeWatchScreen.style.display = "flex";
+    if (currentAdState === AD_STATE.IDLE || currentAdState === AD_STATE.DISMISSED || currentAdState === AD_STATE.FAILED) {
+      requestNextAd();
+    }
     return;
   }
+
   let savedCount = 0;
   try { savedCount = parseInt(localStorage.getItem("admob_internal_ad_count") || "0", 10); } catch (_) {}
   internalAdCount = (Number.isFinite(savedCount) && savedCount >= 0 && savedCount < 5) ? savedCount : 0;
@@ -11387,7 +11426,6 @@ window.resumePendingAdFlow = function() {
   if (popup) popup.style.display = "none";
   if (watchScreen) watchScreen.style.display = "flex";
   updateAdWatchUI(internalAdCount, "استكمال طلب مشاهدة الإعلانات...", "تم استعادة تقدمك السابق");
-  // A native ad may have been interrupted by leaving the app. Start a fresh request safely.
   requestNextAd();
 };
 
@@ -11425,48 +11463,131 @@ function requestNextAd() {
     return;
   }
 
+  // 1. Strict Guard: Do not allow requestNextAd while an ad is currently SHOWING
+  if (currentAdState === AD_STATE.SHOWING) {
+    console.warn("AdMob: requestNextAd() blocked because an ad is currently SHOWING.");
+    return;
+  }
+  if (window.AndroidBridge && typeof window.AndroidBridge.getAdState === "function") {
+    try {
+      const bridgeState = window.AndroidBridge.getAdState();
+      if (bridgeState === "SHOWING") {
+        console.warn("AdMob: requestNextAd() blocked because AndroidBridge reports adState=SHOWING.");
+        currentAdState = AD_STATE.SHOWING;
+        return;
+      }
+    } catch (_) {}
+  }
+
+  // 2. Generate a unique attempt ID for this specific attempt
+  currentAdAttemptId = "att_" + Date.now() + "_" + Math.floor(Math.random() * 1000000);
+  const thisAttemptId = currentAdAttemptId;
+
+  currentAdState = AD_STATE.LOADING;
   currentAdStepResolved = false;
+
   updateAdWatchUI(internalAdCount, "جاري البحث عن إعلان...", "");
 
-  // Wait up to 9 seconds for a real rewarded ad before handling no-fill.
-  if (adSearchTimeoutId) clearTimeout(adSearchTimeoutId);
-  adSearchTimeoutId = setTimeout(() => {
-    if (!currentAdStepResolved) {
-      handleAdTimeoutOrNoFill();
-    }
-  }, ADMOB_CONFIG.searchTimeoutMs);
-
-  // Attempt real AdMob Rewarded Ad via Native Android Bridge
-  if (window.AndroidBridge && typeof window.AndroidBridge.loadAndShowRewardedAd === "function") {
-    try {
-      window.AndroidBridge.loadAndShowRewardedAd(ADMOB_CONFIG.rewardedAdUnitId, ADMOB_CONFIG.searchTimeoutMs);
-    } catch (e) {
-      console.warn("AdMob Native Bridge error: ", e);
-      // Wait for the 6s timeout to handle safely
-    }
-  } else {
-    // In web mode without native bridge: 6s timeout will trigger automatically
-    console.log("AdMob searching for rewarded ad with unit ID: " + ADMOB_CONFIG.rewardedAdUnitId);
-  }
-}
-
-// Callback invoked by Android native layer
-window.onAdMobRewardResult = function(success, detail) {
-  if (currentAdStepResolved) return;
-  
+  // Clear any existing search timer
   if (adSearchTimeoutId) {
     clearTimeout(adSearchTimeoutId);
     adSearchTimeoutId = null;
   }
 
-  if (success) {
-    // Ad watched completely!
-    currentAdStepResolved = true;
+  // 3. Search timeout (9 seconds).
+  // CRITICAL RULE: If the ad starts showing, this timer will be cleared permanently by onAdMobAdShowed.
+  // If this timer ever fires, it checks if the state transitioned to SHOWING before acting.
+  adSearchTimeoutId = setTimeout(() => {
+    // Attempt mismatch check
+    if (currentAdAttemptId !== thisAttemptId) {
+      console.log("AdMob: Search timeout ignored for previous attempt: " + thisAttemptId);
+      return;
+    }
+    // Ad is currently showing check: DO NOT treat as timeout or failure!
+    if (currentAdState === AD_STATE.SHOWING) {
+      console.log("AdMob: Search timeout ignored because ad is currently SHOWING for attempt " + thisAttemptId);
+      return;
+    }
+    if (window.AndroidBridge && typeof window.AndroidBridge.getAdState === "function") {
+      try {
+        if (window.AndroidBridge.getAdState() === "SHOWING") {
+          console.log("AdMob: AndroidBridge is SHOWING, ignoring search timeout for attempt " + thisAttemptId);
+          currentAdState = AD_STATE.SHOWING;
+          return;
+        }
+      } catch (_) {}
+    }
+    if (!currentAdStepResolved) {
+      console.warn("AdMob: Ad search timed out after " + ADMOB_CONFIG.searchTimeoutMs + "ms for attempt " + thisAttemptId);
+      handleAdTimeoutOrNoFill(thisAttemptId);
+    }
+  }, ADMOB_CONFIG.searchTimeoutMs);
+
+  // 4. Request the ad via Android Bridge with the unique attemptId
+  if (window.AndroidBridge && typeof window.AndroidBridge.loadAndShowRewardedAd === "function") {
+    try {
+      window.AndroidBridge.loadAndShowRewardedAd(ADMOB_CONFIG.rewardedAdUnitId, ADMOB_CONFIG.searchTimeoutMs, thisAttemptId);
+    } catch (e) {
+      console.warn("AdMob Native Bridge error: ", e);
+    }
+  } else {
+    console.log("AdMob searching for rewarded ad with unit ID: " + ADMOB_CONFIG.rewardedAdUnitId + " (attempt " + thisAttemptId + ")");
+  }
+}
+
+// Callback invoked by Android native layer when ad successfully starts showing on screen
+window.onAdMobAdShowed = function(attemptId) {
+  console.log("AdMob: onAdMobAdShowed received for attempt: " + attemptId);
+  if (attemptId && currentAdAttemptId && attemptId !== currentAdAttemptId) {
+    console.warn("AdMob: onAdMobAdShowed ignored for outdated attempt " + attemptId + " (current is " + currentAdAttemptId + ")");
+    return;
+  }
+
+  // Transition state to SHOWING
+  currentAdState = AD_STATE.SHOWING;
+
+  // CRITICAL REQUIREMENT: Permanently stop the search timeout for this attempt immediately!
+  if (adSearchTimeoutId) {
+    clearTimeout(adSearchTimeoutId);
+    adSearchTimeoutId = null;
+  }
+
+  updateAdWatchUI(internalAdCount, "يتم الآن عرض الإعلان...", "يرجى مشاهدة الإعلان حتى النهاية للحصول على المكافأة");
+};
+
+// Callback invoked by Android native layer upon ad completion, dismissal, or failure
+window.onAdMobRewardResult = function(success, detail, attemptId) {
+  console.log("AdMob: onAdMobRewardResult received: success=" + success + ", detail=" + detail + ", attemptId=" + attemptId);
+
+  // Guard against old/stale attempt callbacks
+  if (attemptId && currentAdAttemptId && attemptId !== currentAdAttemptId) {
+    console.warn("AdMob: onAdMobRewardResult ignored for outdated attempt " + attemptId + " (current is " + currentAdAttemptId + ")");
+    return;
+  }
+
+  // Prevent duplicate execution from multiple callbacks/timers
+  if (currentAdStepResolved) {
+    console.log("AdMob: Ad step already resolved for attempt " + attemptId + ", ignoring duplicate callback.");
+    return;
+  }
+
+  // Stop any lingering search timer
+  if (adSearchTimeoutId) {
+    clearTimeout(adSearchTimeoutId);
+    adSearchTimeoutId = null;
+  }
+
+  currentAdStepResolved = true;
+
+  if (success && (detail === "watched" || detail === "reward_earned" || detail === "earned" || detail === "true")) {
+    // Ad was genuinely watched and reward was earned
+    currentAdState = AD_STATE.DISMISSED;
     internalAdCount++;
     try { localStorage.setItem("admob_internal_ad_count", internalAdCount.toString()); } catch (_) {}
     updateAdWatchUI(internalAdCount, "تمت مشاهدة الإعلان بنجاح!", "شكراً لك! تم احتساب الإعلان (+1)");
-    
+
     setTimeout(() => {
+      currentAdState = AD_STATE.IDLE;
       if (internalAdCount >= 5) {
         completeAllAdsFlow();
       } else {
@@ -11474,26 +11595,62 @@ window.onAdMobRewardResult = function(success, detail) {
       }
     }, 1200);
   } else {
-    // Failed or timeout or no fill -> bypass without showing error to user
-    handleAdTimeoutOrNoFill();
+    // User dismissed early without earning reward, or load/show failed
+    if (detail === "dismissed_early") {
+      currentAdState = AD_STATE.DISMISSED;
+      updateAdWatchUI(internalAdCount, "تم إغلاق الإعلان مبكراً", "لم يتم احتساب الإعلان لأنك أغلقته قبل اكتماله");
+      setTimeout(() => {
+        currentAdState = AD_STATE.IDLE;
+        updateAdWatchUI(internalAdCount, "جاري إعادة المحاولة...", "");
+        requestNextAd();
+      }, 2000);
+    } else {
+      currentAdState = AD_STATE.FAILED;
+      // No ad filled or failed to load -> bypass gracefully
+      handleAdTimeoutOrNoFill(attemptId);
+    }
   }
 };
 
-function handleAdTimeoutOrNoFill() {
+function handleAdTimeoutOrNoFill(attemptId) {
+  // Stale attempt check
+  if (attemptId && currentAdAttemptId && attemptId !== currentAdAttemptId) {
+    console.log("AdMob: handleAdTimeoutOrNoFill ignored for stale attempt " + attemptId);
+    return;
+  }
+
+  // CRITICAL: If an ad is SHOWING, never treat as timeout or no-fill!
+  if (currentAdState === AD_STATE.SHOWING) {
+    console.log("AdMob: handleAdTimeoutOrNoFill blocked because ad is SHOWING.");
+    return;
+  }
+  if (window.AndroidBridge && typeof window.AndroidBridge.getAdState === "function") {
+    try {
+      if (window.AndroidBridge.getAdState() === "SHOWING") {
+        console.log("AdMob: handleAdTimeoutOrNoFill blocked because AndroidBridge is SHOWING.");
+        currentAdState = AD_STATE.SHOWING;
+        return;
+      }
+    } catch (_) {}
+  }
+
   if (currentAdStepResolved) return;
   currentAdStepResolved = true;
-  
+
   if (adSearchTimeoutId) {
     clearTimeout(adSearchTimeoutId);
     adSearchTimeoutId = null;
   }
 
-  // Automatic increment and bypass per requirement 5
+  currentAdState = AD_STATE.FAILED;
+
+  // Automatic increment and bypass per requirement
   internalAdCount++;
   try { localStorage.setItem("admob_internal_ad_count", internalAdCount.toString()); } catch (_) {}
   updateAdWatchUI(internalAdCount, "جاري المتابعة...", "لا يوجد إعلان متاح، تم تمريرك تلقائيا");
 
   setTimeout(() => {
+    currentAdState = AD_STATE.IDLE;
     if (internalAdCount >= 5) {
       completeAllAdsFlow();
     } else {
@@ -11504,6 +11661,15 @@ function handleAdTimeoutOrNoFill() {
 
 function completeAllAdsFlow() {
   isAdFlowActive = false;
+  currentAdState = AD_STATE.IDLE;
+  currentAdAttemptId = "";
+  if (adSearchTimeoutId) {
+    clearTimeout(adSearchTimeoutId);
+    adSearchTimeoutId = null;
+  }
+  if (window.AndroidBridge && typeof window.AndroidBridge.resetAdState === "function") {
+    try { window.AndroidBridge.resetAdState(); } catch (_) {}
+  }
   try {
     const completedAt = Date.now().toString();
     localStorage.removeItem("admob_internal_ad_count");
@@ -11512,9 +11678,9 @@ function completeAllAdsFlow() {
     localStorage.setItem("admob_last_completed_timestamp", completedAt);
     localStorage.setItem("admob_last_shown_timestamp", completedAt);
   } catch (_) {}
-  
+
   updateAdWatchUI(5, "تم الانتهاء بنجاح! 🎉", "شكراً جزيلاً لدعمكم تطبيق BLACK ANIME");
-  
+
   setTimeout(() => {
     const watchScreen = document.getElementById("adWatchScreen");
     if (watchScreen) watchScreen.style.display = "none";
@@ -11533,6 +11699,13 @@ setTimeout(() => {
 // Check and trigger daily ad prompt upon returning to the app if 24 hours have passed
 document.addEventListener("visibilitychange", function() {
   if (document.visibilityState === "visible") {
+    // If an ad is currently SHOWING, never trigger resume or daily popup
+    if (currentAdState === AD_STATE.SHOWING) return;
+    if (window.AndroidBridge && typeof window.AndroidBridge.getAdState === "function") {
+      try {
+        if (window.AndroidBridge.getAdState() === "SHOWING") return;
+      } catch (_) {}
+    }
     if (typeof window.resumePendingAdFlow === "function") window.resumePendingAdFlow();
     if (!isAdFlowActive && typeof window.checkAndTriggerDailyAdMobPopup === "function") {
       window.checkAndTriggerDailyAdMobPopup();
@@ -11540,6 +11713,12 @@ document.addEventListener("visibilitychange", function() {
   }
 });
 window.addEventListener("focus", function() {
+  if (currentAdState === AD_STATE.SHOWING) return;
+  if (window.AndroidBridge && typeof window.AndroidBridge.getAdState === "function") {
+    try {
+      if (window.AndroidBridge.getAdState() === "SHOWING") return;
+    } catch (_) {}
+  }
   if (typeof window.resumePendingAdFlow === "function") window.resumePendingAdFlow();
   if (!isAdFlowActive && typeof window.checkAndTriggerDailyAdMobPopup === "function") {
     window.checkAndTriggerDailyAdMobPopup();
