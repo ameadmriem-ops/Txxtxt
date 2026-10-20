@@ -6599,12 +6599,12 @@ window.renderAccountPage = function() {
         <span style="color:#666">←</span>
       </div>
 
-      <div class="account-action-card" onclick="editPhotoUrlPrompt()">
+      <div class="account-action-card" onclick="openAvatarPickerPage()">
         <div class="account-action-left">
           <span style="font-size:20px">🖼️</span>
           <div>
             <div style="font-size:14px;font-weight:700;color:#fff">تعديل الصورة الشخصية</div>
-            <div style="font-size:11.5px;color:#888">إدخال رابط صورة جديدة</div>
+            <div style="font-size:11.5px;color:#888">اختيار صورة شخصية من المعرض</div>
           </div>
         </div>
         <span style="color:#666">←</span>
@@ -6654,22 +6654,9 @@ window.editDisplayNamePrompt = async function() {
   }
 };
 
-window.editPhotoUrlPrompt = async function() {
-  const user = window.currentAuthUser;
-  if (!user) return;
-  const current = user.photoURL || "";
-  const newPhoto = prompt("أدخل رابط صورتك الشخصية الجديدة (URL مباشر):", current);
-  if (newPhoto && newPhoto.trim() && newPhoto.trim() !== current) {
-    try {
-      await updateProfile(user, { photoURL: newPhoto.trim() });
-      await setDoc(doc(db, "users", user.uid), { photoURL: newPhoto.trim() }, { merge: true });
-      updateDrawerUserState();
-      updateTopBarAvatar();
-      renderAccountPage();
-      alert("تم تحديث الصورة بنجاح!");
-    } catch (e) {
-      alert("فشل تحديث الصورة: " + e.message);
-    }
+window.editPhotoUrlPrompt = function() {
+  if (typeof window.openAvatarPickerPage === "function") {
+    window.openAvatarPickerPage();
   }
 };
 
@@ -9460,6 +9447,7 @@ function dispatchNamedPageRender(p) {
   else if (p === "about") renderAboutPage();
   else if (p === "reports") openAdminReportsPage(true);
   else if (p === "account") renderAccountPage();
+  else if (p === "avatar_picker") renderAvatarPickerPage();
   else if (p === "manga") renderMangaPage();
   else if (p === "seasons") renderSeasonsPage();
   else if (p === "stats") renderStatsPage();
@@ -9720,7 +9708,7 @@ window.renderAddPage=(isBack=false)=>{
   const newReportsCount = (window.allReportsList || []).filter(r => (r.status || "جديد") === "جديد").length;
   const totalReportsCount = (window.allReportsList || []).length;
 
-  main.innerHTML=`<div class="page-header"><button class="back-btn" onclick="goBack()">← رجوع</button></div><h1 style="padding:16px">لوحة التحكم</h1><div style="padding:12px;display:flex;flex-direction:column;gap:10px"><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button onclick="startSelectEpisodeMode()" style="background:#fff;color:#000;border:none;padding:12px;border-radius:10px;font-weight:bold;cursor:pointer">📺 إضافة بث / تعديل بوستر</button><button onclick="toggleDeleteMode()" style="background:${deleteMode?'#fff':'#e50914'};color:${deleteMode?'#000':'#fff'};border:none;padding:12px;border-radius:10px;font-weight:bold;cursor:pointer">${deleteMode?'إلغاء':'🗑️ حذف'}</button></div><button onclick="openAdminReportsPage()" style="width:100%;background:linear-gradient(135deg,#e50914,#99050d);color:#fff;border:1px solid #ff4d4d;padding:13px;border-radius:12px;font-size:15px;font-weight:900;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 4px 15px rgba(229,9,20,0.35)"><span>📩 البلاغات</span><span style="background:rgba(0,0,0,0.35);padding:2px 10px;border-radius:12px;font-size:12px">${newReportsCount > 0 ? `${newReportsCount} جديد` : `${totalReportsCount} بلاغ`}</span></button><div style="display:flex;gap:8px"><button onclick="showPage('home')" style="flex:1;background:#1a1a1a;color:#aaa;border:1px solid #333;padding:9px;border-radius:8px;cursor:pointer">🔒 إغلاق اللوحة</button><button onclick="confirmLogout()" style="flex:1;background:#250505;color:#ff6b6b;border:1px solid #441111;padding:9px;border-radius:8px;cursor:pointer;font-weight:bold">🚪 تسجيل الخروج</button></div><div style="background:#111;border:1px solid #222;border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:10px"><div style="font-weight:bold;font-size:14px;color:#00d2ff;display:flex;align-items:center;justify-content:space-between"><span>🖼️ إدارة المحتوى وتعديل البوسترات (${(window.allContent||[]).length})</span></div><input class="input" placeholder="ابحث عن فيلم أو مسلسل أو أنمي لتعديل البوستر..." oninput="filterAdminManageList(this.value)" style="padding:9px 12px;font-size:13px"><div id="adminManageContentList" style="display:flex;flex-direction:column;gap:8px;max-height:320px;overflow-y:auto;padding-right:2px">${window.renderAdminManageListHtml("")}</div></div><div style="background:#111;border:1px solid #222;border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px"><div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px"><div style="font-weight:bold;font-size:14px;color:#00d2ff;display:flex;align-items:center;gap:6px">🔔 نظام إشعارات الهواتف (FCM + all_users)</div><span id="adminRegisteredDevicesBadge" style="background:#0d283a;color:#00d2ff;border:1px solid #1e4d6b;padding:3px 9px;border-radius:12px;font-size:11px;font-weight:bold">📱 الأجهزة المشتركة (all_users): ${activeDevCount} جهاز</span></div><p style="font-size:12px;color:#aaa;line-height:1.5">يتم إرسال إشعار تلقائي بالبوستر واسم العمل ورقم الحلقة لجميع الهواتف فور إضافة أي حلقة جديدة، كما يمكنك إرسال إشعار مخصص للجميع من الزر بالأسفل.</p><div id="adminLastBroadcastStatus" style="background:#0c141c;border:1px solid #1b2e40;padding:8px 10px;border-radius:8px;font-size:11px;color:#bbb;line-height:1.5">${latestNotifHtml}</div><div style="display:flex;gap:6px;flex-wrap:wrap"><button type="button" onclick="copyFcmToken()" style="flex:1;background:#1a2a3a;color:#00d2ff;border:1px solid #2a4a6a;padding:9px;border-radius:8px;font-size:12px;font-weight:bold;cursor:pointer">📋 نسخ رمز FCM لهذا الجهاز</button><button type="button" onclick="requestNotifPermission()" style="background:#222;color:#fff;border:1px solid #333;padding:9px;border-radius:8px;font-size:12px;cursor:pointer">🔔 طلب إذن الإشعارات</button></div><button type="button" onclick="openTestNotificationModal()" style="background:linear-gradient(135deg,#0072ff,#00d2ff);color:#000;border:none;padding:10px;border-radius:8px;font-size:13px;font-weight:bold;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">🚀 إرسال إشعار مخصص لجميع الهواتف (عنوان، بوستر، حلقة، أنمي)</button></div><hr style="border-color:#1f1f1f"><select id="addType" class="input" onchange="window.handleAddTypeChange(this.value)"><option value="anime">أنمي</option><option value="animation">أنميشن</option><option value="movies_series">أفلام ومسلسلات</option></select><div id="animeCategorySection" style="display:flex;flex-direction:column;gap:6px">
+  main.innerHTML=`<div class="page-header"><button class="back-btn" onclick="goBack()">← رجوع</button></div><h1 style="padding:16px">لوحة التحكم</h1><div style="padding:12px;display:flex;flex-direction:column;gap:10px"><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button onclick="startSelectEpisodeMode()" style="background:#fff;color:#000;border:none;padding:12px;border-radius:10px;font-weight:bold;cursor:pointer">📺 إضافة بث / تعديل بوستر</button><button onclick="toggleDeleteMode()" style="background:${deleteMode?'#fff':'#e50914'};color:${deleteMode?'#000':'#fff'};border:none;padding:12px;border-radius:10px;font-weight:bold;cursor:pointer">${deleteMode?'إلغاء':'🗑️ حذف'}</button></div><button onclick="openAdminReportsPage()" style="width:100%;background:linear-gradient(135deg,#e50914,#99050d);color:#fff;border:1px solid #ff4d4d;padding:13px;border-radius:12px;font-size:15px;font-weight:900;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 4px 15px rgba(229,9,20,0.35)"><span>📩 البلاغات</span><span style="background:rgba(0,0,0,0.35);padding:2px 10px;border-radius:12px;font-size:12px">${newReportsCount > 0 ? `${newReportsCount} جديد` : `${totalReportsCount} بلاغ`}</span></button><div style="display:flex;gap:8px"><button onclick="showPage('home')" style="flex:1;background:#1a1a1a;color:#aaa;border:1px solid #333;padding:9px;border-radius:8px;cursor:pointer">🔒 إغلاق اللوحة</button><button onclick="confirmLogout()" style="flex:1;background:#250505;color:#ff6b6b;border:1px solid #441111;padding:9px;border-radius:8px;cursor:pointer;font-weight:bold">🚪 تسجيل الخروج</button></div><div style="background:#111;border:1px solid #222;border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:10px"><div style="font-weight:bold;font-size:14px;color:#00d2ff;display:flex;align-items:center;justify-content:space-between"><span>🖼️ إدارة المحتوى وتعديل البوسترات (${(window.allContent||[]).length})</span></div><input class="input" placeholder="ابحث عن فيلم أو مسلسل أو أنمي لتعديل البوستر..." oninput="filterAdminManageList(this.value)" style="padding:9px 12px;font-size:13px"><div id="adminManageContentList" style="display:flex;flex-direction:column;gap:8px;max-height:320px;overflow-y:auto;padding-right:2px">${window.renderAdminManageListHtml("")}</div></div>${window.renderAdminAvatarManagementSectionHtml()}<div style="background:#111;border:1px solid #222;border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px"><div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px"><div style="font-weight:bold;font-size:14px;color:#00d2ff;display:flex;align-items:center;gap:6px">🔔 نظام إشعارات الهواتف (FCM + all_users)</div><span id="adminRegisteredDevicesBadge" style="background:#0d283a;color:#00d2ff;border:1px solid #1e4d6b;padding:3px 9px;border-radius:12px;font-size:11px;font-weight:bold">📱 الأجهزة المشتركة (all_users): ${activeDevCount} جهاز</span></div><p style="font-size:12px;color:#aaa;line-height:1.5">يتم إرسال إشعار تلقائي بالبوستر واسم العمل ورقم الحلقة لجميع الهواتف فور إضافة أي حلقة جديدة، كما يمكنك إرسال إشعار مخصص للجميع من الزر بالأسفل.</p><div id="adminLastBroadcastStatus" style="background:#0c141c;border:1px solid #1b2e40;padding:8px 10px;border-radius:8px;font-size:11px;color:#bbb;line-height:1.5">${latestNotifHtml}</div><div style="display:flex;gap:6px;flex-wrap:wrap"><button type="button" onclick="copyFcmToken()" style="flex:1;background:#1a2a3a;color:#00d2ff;border:1px solid #2a4a6a;padding:9px;border-radius:8px;font-size:12px;font-weight:bold;cursor:pointer">📋 نسخ رمز FCM لهذا الجهاز</button><button type="button" onclick="requestNotifPermission()" style="background:#222;color:#fff;border:1px solid #333;padding:9px;border-radius:8px;font-size:12px;cursor:pointer">🔔 طلب إذن الإشعارات</button></div><button type="button" onclick="openTestNotificationModal()" style="background:linear-gradient(135deg,#0072ff,#00d2ff);color:#000;border:none;padding:10px;border-radius:8px;font-size:13px;font-weight:bold;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">🚀 إرسال إشعار مخصص لجميع الهواتف (عنوان، بوستر، حلقة، أنمي)</button></div><hr style="border-color:#1f1f1f"><select id="addType" class="input" onchange="window.handleAddTypeChange(this.value)"><option value="anime">أنمي</option><option value="animation">أنميشن</option><option value="movies_series">أفلام ومسلسلات</option></select><div id="animeCategorySection" style="display:flex;flex-direction:column;gap:6px">
   <label style="font-size:12px;color:#00d2ff;font-weight:bold">نوع الأنمي (مسلسل، فلم...):</label>
   <select id="addCategory" class="input">
     <option value="مسلسل">مسلسل</option>
@@ -10406,6 +10394,443 @@ onSnapshot(reportsQuery, (snap) => {
 }, (err) => {
   console.warn("app_reports realtime listener error:", err);
 });
+
+// ================= Profile Avatars Management & Firestore Sync =================
+const avatarsColRef = collection(db, "profile_avatars");
+
+const PRESET_AVATARS = [
+  { id: "preset_1", url: "https://images.unsplash.com/photo-1578632767115-351597cf2477?w=400&auto=format&fit=crop&q=80", title: "أنمي 1" },
+  { id: "preset_2", url: "https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=400&auto=format&fit=crop&q=80", title: "أنمي 2" },
+  { id: "preset_3", url: "https://images.unsplash.com/photo-1563089145-599997674d42?w=400&auto=format&fit=crop&q=80", title: "أنمي 3" },
+  { id: "preset_4", url: "https://images.unsplash.com/photo-1534447677768-be436bb09401?w=400&auto=format&fit=crop&q=80", title: "أنمي 4" },
+  { id: "preset_5", url: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=400&auto=format&fit=crop&q=80", title: "أنمي 5" },
+  { id: "preset_6", url: "https://images.unsplash.com/photo-1579783902614-a3fb3927b675?w=400&auto=format&fit=crop&q=80", title: "أنمي 6" },
+  { id: "preset_7", url: "https://images.unsplash.com/photo-1569701813229-33284b643e3c?w=400&auto=format&fit=crop&q=80", title: "أنمي 7" },
+  { id: "preset_8", url: "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=400&auto=format&fit=crop&q=80", title: "أنمي 8" }
+];
+
+let cachedAvatars = [];
+try {
+  cachedAvatars = JSON.parse(localStorage.getItem("blackanime_profile_avatars") || "[]");
+} catch(e) {}
+window.appProfileAvatars = (Array.isArray(cachedAvatars) && cachedAvatars.length > 0) ? cachedAvatars : [...PRESET_AVATARS];
+window.selectedAvatarForUser = "";
+window._pendingAdminAvatarUrl = "";
+
+// Real-time listener for profile avatars from Firestore
+try {
+  onSnapshot(avatarsColRef, (snap) => {
+    const firestoreAvatars = snap.docs.map(d => ({
+      id: d.id,
+      url: d.data().url,
+      createdAt: d.data().createdAt || 0,
+      createdBy: d.data().createdBy || ""
+    })).filter(a => !!a.url);
+
+    // Merge firestoreAvatars (admin custom additions at top) with presets
+    const combined = [...firestoreAvatars];
+    PRESET_AVATARS.forEach(p => {
+      if (!combined.some(c => c.url === p.url)) {
+        combined.push(p);
+      }
+    });
+
+    window.appProfileAvatars = combined;
+    try {
+      localStorage.setItem("blackanime_profile_avatars", JSON.stringify(combined));
+    } catch(e) {}
+
+    // Refresh UI if Admin is currently viewing the Add page
+    const adminGrid = document.getElementById("adminAvatarsGridContainer");
+    if (adminGrid && typeof window.renderAdminAvatarsGridHtml === "function") {
+      adminGrid.innerHTML = window.renderAdminAvatarsGridHtml();
+    }
+    const countBadge = document.getElementById("adminAvatarsCountBadge");
+    if (countBadge) {
+      countBadge.textContent = `${window.appProfileAvatars.length} صورة متاحة`;
+    }
+
+    // Refresh avatar picker page if currently active
+    if (currentPage === "avatar_picker" && typeof window.renderAvatarPickerPage === "function") {
+      window.renderAvatarPickerPage();
+    }
+  }, (err) => {
+    console.warn("profile_avatars realtime listener error:", err);
+  });
+} catch(e) {
+  console.warn("Failed to attach profile_avatars listener:", e);
+}
+
+// 1. Admin Section in Add Page: «إدارة صور البروفايل»
+window.renderAdminAvatarManagementSectionHtml = function() {
+  const count = (window.appProfileAvatars || []).length;
+  return `
+    <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:12px;box-shadow:0 4px 15px rgba(0,0,0,0.4)">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <div style="font-weight:bold;font-size:14px;color:#e50914;display:flex;align-items:center;gap:8px">
+          <span style="font-size:18px">🖼️</span>
+          <span>إدارة صور البروفايل</span>
+        </div>
+        <span id="adminAvatarsCountBadge" style="background:#250505;color:#ff6b6b;border:1px solid #441111;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:bold">
+          ${count} صورة متاحة
+        </span>
+      </div>
+      <p style="font-size:12px;color:#aaa;line-height:1.5;margin:0">
+        أضف روابط صور مباشرة لتظهر لجميع المستخدمين في صفحة اختيار الصورة الشخصية، دون الحاجة لرفع ملفات من الهاتف أو تعديل الكود.
+      </p>
+      
+      <div style="display:flex;gap:8px;align-items:stretch">
+        <input id="adminAvatarUrlInput" class="input" style="flex:1;direction:ltr;font-size:12.5px" placeholder="https://example.com/avatar.jpg" oninput="window.onAdminAvatarUrlInputChange(this.value)">
+        <button type="button" onclick="window.checkAndPreviewAdminAvatar()" style="background:#e50914;color:#fff;border:none;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:bold;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:6px">
+          <span>➕</span>
+          <span>إضافة صورة</span>
+        </button>
+      </div>
+
+      <div id="adminAvatarPreviewContainer" style="display:none;background:#181818;border:1px solid #e50914;border-radius:10px;padding:12px"></div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:4px">
+        <span style="font-size:12px;font-weight:bold;color:#ddd">الصور المعروضة للمستخدمين:</span>
+        <span style="font-size:11px;color:#777">اضغط على ✕ لحذف أي صورة</span>
+      </div>
+      <div id="adminAvatarsGridContainer" style="display:grid;grid-template-columns:repeat(auto-fill, minmax(70px, 1fr));gap:8px;max-height:220px;overflow-y:auto;padding:2px">
+        ${window.renderAdminAvatarsGridHtml()}
+      </div>
+    </div>
+  `;
+};
+
+window.renderAdminAvatarsGridHtml = function() {
+  const list = window.appProfileAvatars || [];
+  if (list.length === 0) {
+    return `<div style="grid-column:1/-1;text-align:center;padding:16px;color:#777;font-size:12px">لا توجد صور مضافة بعد. أدخل رابطاً أعلاه للإضافة.</div>`;
+  }
+  return list.map(item => {
+    const safeUrl = (item.url || "").replace(/"/g, '&quot;');
+    const safeId = (item.id || "").replace(/"/g, '&quot;');
+    return `
+      <div style="position:relative;width:100%;aspect-ratio:1/1;border-radius:10px;overflow:hidden;border:1px solid #333;background:#1a1a1a;box-shadow:0 2px 6px rgba(0,0,0,0.4)">
+        <img src="${safeUrl}" alt="avatar" style="width:100%;height:100%;object-fit:cover" onerror="this.onerror=null;this.parentElement.style.opacity='0.4';">
+        <button type="button" onclick="window.confirmDeleteAdminAvatar('${safeId}', '${safeUrl}')" style="position:absolute;top:2px;right:2px;background:rgba(229,9,20,0.9);color:#fff;border:none;border-radius:50%;width:22px;height:22px;font-size:11px;font-weight:bold;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 2px 4px rgba(0,0,0,0.6)" title="حذف الصورة">✕</button>
+      </div>
+    `;
+  }).join("");
+};
+
+window.onAdminAvatarUrlInputChange = function() {
+  const container = document.getElementById("adminAvatarPreviewContainer");
+  if (container) {
+    container.style.display = "none";
+    container.innerHTML = "";
+  }
+  window._pendingAdminAvatarUrl = "";
+};
+
+window.cancelAdminAvatarPreview = function() {
+  const container = document.getElementById("adminAvatarPreviewContainer");
+  if (container) {
+    container.style.display = "none";
+    container.innerHTML = "";
+  }
+  window._pendingAdminAvatarUrl = "";
+};
+
+window.checkAndPreviewAdminAvatar = function() {
+  const input = document.getElementById("adminAvatarUrlInput");
+  const container = document.getElementById("adminAvatarPreviewContainer");
+  if (!input || !container) return;
+  const rawUrl = input.value.trim();
+  if (!rawUrl) {
+    alert("يرجى إدخال رابط الصورة أولاً.");
+    input.focus();
+    return;
+  }
+  if (!rawUrl.startsWith("http://") && !rawUrl.startsWith("https://")) {
+    alert("يرجى إدخال رابط صورة صحيح يبدأ بـ http:// أو https://");
+    input.focus();
+    return;
+  }
+
+  container.style.display = "block";
+  container.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;color:#aaa;font-size:12px;padding:8px">
+      <span style="font-size:16px">⏳</span>
+      <span>جاري التحقق من صحة الرابط وتحميل المعاينة...</span>
+    </div>
+  `;
+
+  let isHandled = false;
+  const timeoutId = setTimeout(() => {
+    if (isHandled) return;
+    isHandled = true;
+    container.innerHTML = `
+      <div style="color:#ff6b6b;font-size:12px;display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;align-items:center;gap:6px">
+          <span>⚠️</span> <span>استغرق تحميل الصورة وقتاً أطول من المعتاد.</span>
+        </div>
+        <div style="color:#888;font-size:11px">تأكد من أن الرابط مباشر لصورة (JPG, PNG, WEBP) ويعمل بشكل عام بدون تسجيل دخول أو حظر.</div>
+      </div>
+    `;
+  }, 12000);
+
+  const testImg = new Image();
+  testImg.onload = function() {
+    if (isHandled) return;
+    isHandled = true;
+    clearTimeout(timeoutId);
+    window._pendingAdminAvatarUrl = rawUrl;
+    const safeUrl = rawUrl.replace(/"/g, '&quot;');
+    container.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:12px">
+          <img src="${safeUrl}" style="width:58px;height:58px;border-radius:12px;object-fit:cover;border:2px solid #e50914;background:#222">
+          <div>
+            <div style="font-size:13px;font-weight:bold;color:#4ade80">✅ معاينة الصورة ناجحة</div>
+            <div style="font-size:11px;color:#888">اضغط على زر «حفظ» لنشرها لجميع المستخدمين</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button type="button" onclick="window.saveAdminAvatar()" style="background:#e50914;color:#fff;border:none;padding:9px 18px;border-radius:8px;font-weight:bold;font-size:13px;cursor:pointer;display:flex;align-items:center;gap:6px;box-shadow:0 3px 10px rgba(229,9,20,0.4)">
+            <span>💾</span> <span>حفظ</span>
+          </button>
+          <button type="button" onclick="window.cancelAdminAvatarPreview()" style="background:#222;color:#aaa;border:1px solid #333;padding:9px 14px;border-radius:8px;font-size:12px;cursor:pointer">
+            إلغاء
+          </button>
+        </div>
+      </div>
+    `;
+  };
+
+  testImg.onerror = function() {
+    if (isHandled) return;
+    isHandled = true;
+    clearTimeout(timeoutId);
+    container.innerHTML = `
+      <div style="color:#ff6b6b;font-size:12px;display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;align-items:center;gap:6px">
+          <span>❌</span> <span>تعذر تحميل الصورة من هذا الرابط.</span>
+        </div>
+        <div style="color:#888;font-size:11px">تأكد من أن الرابط مباشر لصورة صالحة (PNG أو JPG أو WEBP) وأن الخادم يسمح بعرضها.</div>
+      </div>
+    `;
+  };
+
+  testImg.src = rawUrl;
+};
+
+window.saveAdminAvatar = async function() {
+  if (!window.isAdminAuthorized()) {
+    alert("عذراً، هذه الميزة مخصصة للمشرف فقط.");
+    return;
+  }
+  const urlToSave = window._pendingAdminAvatarUrl;
+  if (!urlToSave) {
+    alert("يرجى فحص ومعاينة الصورة أولاً قبل الحفظ.");
+    return;
+  }
+
+  try {
+    const docRef = await addDoc(avatarsColRef, {
+      url: urlToSave,
+      createdAt: serverTimestamp(),
+      createdBy: window.currentAuthUser?.email || "admin"
+    });
+
+    if (!window.appProfileAvatars.some(a => a.url === urlToSave)) {
+      window.appProfileAvatars.unshift({
+        id: docRef.id,
+        url: urlToSave,
+        createdAt: Date.now()
+      });
+      try {
+        localStorage.setItem("blackanime_profile_avatars", JSON.stringify(window.appProfileAvatars));
+      } catch(e) {}
+    }
+
+    window._pendingAdminAvatarUrl = "";
+    const input = document.getElementById("adminAvatarUrlInput");
+    if (input) input.value = "";
+    const container = document.getElementById("adminAvatarPreviewContainer");
+    if (container) {
+      container.style.display = "none";
+      container.innerHTML = "";
+    }
+    const grid = document.getElementById("adminAvatarsGridContainer");
+    if (grid) grid.innerHTML = window.renderAdminAvatarsGridHtml();
+    const countBadge = document.getElementById("adminAvatarsCountBadge");
+    if (countBadge) countBadge.textContent = `${window.appProfileAvatars.length} صورة متاحة`;
+
+    alert("تم حفظ الصورة ونشرها لجميع المستخدمين بنجاح! 🖼️");
+  } catch(e) {
+    console.error("Save avatar error:", e);
+    // Fallback local persistence if Firestore write fails
+    if (!window.appProfileAvatars.some(a => a.url === urlToSave)) {
+      window.appProfileAvatars.unshift({
+        id: "local_" + Date.now(),
+        url: urlToSave,
+        createdAt: Date.now()
+      });
+      try {
+        localStorage.setItem("blackanime_profile_avatars", JSON.stringify(window.appProfileAvatars));
+      } catch(e2) {}
+    }
+    window._pendingAdminAvatarUrl = "";
+    const input = document.getElementById("adminAvatarUrlInput");
+    if (input) input.value = "";
+    const container = document.getElementById("adminAvatarPreviewContainer");
+    if (container) {
+      container.style.display = "none";
+      container.innerHTML = "";
+    }
+    const grid = document.getElementById("adminAvatarsGridContainer");
+    if (grid) grid.innerHTML = window.renderAdminAvatarsGridHtml();
+    alert("تم حفظ الصورة في القائمة بنجاح! (حفظ محلي: " + e.message + ")");
+  }
+};
+
+window.confirmDeleteAdminAvatar = async function(avatarId, avatarUrl) {
+  if (!window.isAdminAuthorized()) {
+    alert("عذراً، هذه الميزة مخصصة للمشرف فقط.");
+    return;
+  }
+  if (!confirm("هل تريد بالتأكيد حذف هذه الصورة من قائمة صور البروفايل المتاحة لجميع المستخدمين؟")) {
+    return;
+  }
+
+  try {
+    if (avatarId && !avatarId.startsWith("preset_") && !avatarId.startsWith("local_")) {
+      await deleteDoc(doc(db, "profile_avatars", avatarId));
+    }
+  } catch(e) {
+    console.warn("Delete avatar firestore warning:", e);
+  }
+
+  window.appProfileAvatars = (window.appProfileAvatars || []).filter(a => a.id !== avatarId && a.url !== avatarUrl);
+  try {
+    localStorage.setItem("blackanime_profile_avatars", JSON.stringify(window.appProfileAvatars));
+  } catch(e) {}
+
+  const grid = document.getElementById("adminAvatarsGridContainer");
+  if (grid) grid.innerHTML = window.renderAdminAvatarsGridHtml();
+  const countBadge = document.getElementById("adminAvatarsCountBadge");
+  if (countBadge) countBadge.textContent = `${window.appProfileAvatars.length} صورة متاحة`;
+
+  alert("تم حذف الصورة بنجاح.");
+};
+
+// 2. User Avatar Picker Page: «اختيار صورة البروفايل للمستخدم»
+window.openAvatarPickerPage = function() {
+  window.selectedAvatarForUser = window.currentAuthUser?.photoURL || "";
+  navigateTo("avatar_picker", window.renderAvatarPickerPage);
+};
+
+window.renderAvatarPickerPage = function() {
+  document.body.classList.remove("page-details-active", "page-episodes-active");
+  const globalTopBar = document.querySelector(".top-bar");
+  if (globalTopBar) globalTopBar.style.display = "flex";
+  setActiveNav("account");
+  currentPage = "avatar_picker";
+
+  const user = window.currentAuthUser;
+  const list = window.appProfileAvatars || [];
+  const selectedUrl = window.selectedAvatarForUser || (user?.photoURL || "");
+
+  let gridHtml = "";
+  if (list.length === 0) {
+    gridHtml = `
+      <div style="grid-column:1/-1;text-align:center;padding:50px 16px;color:#888">
+        <div style="font-size:42px;margin-bottom:10px">🖼️</div>
+        <div style="font-size:15px;font-weight:bold;color:#fff;margin-bottom:6px">لا توجد صور شخصية متاحة حالياً</div>
+        <div style="font-size:12px;color:#777">سيقوم المشرف بإضافة صور جديدة قريباً</div>
+      </div>
+    `;
+  } else {
+    gridHtml = list.map(item => {
+      const isSelected = (selectedUrl === item.url);
+      const isCurrent = (user?.photoURL === item.url);
+      const safeUrl = (item.url || "").replace(/"/g, '&quot;');
+      return `
+        <div onclick="window.selectAvatarOption('${safeUrl}')" style="position:relative;width:100%;aspect-ratio:1/1;border-radius:14px;overflow:hidden;cursor:pointer;border:${isSelected ? '3px solid #e50914' : '2px solid #282828'};box-shadow:${isSelected ? '0 0 16px rgba(229,9,20,0.75)' : 'none'};background:#141414;transition:all 0.2s ease">
+          <img src="${safeUrl}" alt="avatar" style="width:100%;height:100%;object-fit:cover" onerror="this.onerror=null;this.parentElement.style.opacity='0.3';">
+          ${isSelected ? `<div style="position:absolute;top:6px;right:6px;background:#e50914;color:#fff;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:900;box-shadow:0 2px 6px rgba(0,0,0,0.8)">✓</div>` : ''}
+          ${isCurrent ? `<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,0.8);color:#00d2ff;font-size:10px;font-weight:bold;text-align:center;padding:3px 0">الحالية</div>` : ''}
+        </div>
+      `;
+    }).join("");
+  }
+
+  main.innerHTML = `
+    <div class="page-header" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px">
+      <button class="back-btn" onclick="goBack()" style="background:#1a1a1a;color:#fff;border:1px solid #333;padding:8px 14px;border-radius:8px;font-size:13px;cursor:pointer">← رجوع</button>
+      <div style="font-size:17px;font-weight:900;color:#fff;flex:1;text-align:center">تعديل الصورة الشخصية</div>
+      <div style="width:60px"></div>
+    </div>
+    
+    <div style="padding:16px;text-align:center;background:linear-gradient(180deg,#1c0607,#0e0e0e);border-bottom:1px solid #222;margin-bottom:16px">
+      <div style="font-size:32px;margin-bottom:6px">🎭</div>
+      <h2 style="font-size:18px;font-weight:900;color:#fff;margin:0 0 4px 0">اختر صورتك الرمزية</h2>
+      <p style="font-size:12px;color:#aaa;margin:0;line-height:1.5">
+        انقر على أي صورة لتحديدها، ثم اضغط على زر اعتماد الصورة لحفظها في حسابك
+      </p>
+    </div>
+    
+    <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(88px, 1fr));gap:12px;padding:0 16px 120px 16px">
+      ${gridHtml}
+    </div>
+    
+    <div style="position:fixed;bottom:0;left:0;right:0;background:rgba(14,14,14,0.96);backdrop-filter:blur(10px);border-top:1px solid #2a2a2a;padding:12px 16px;display:flex;align-items:center;gap:12px;z-index:999;box-shadow:0 -4px 20px rgba(0,0,0,0.8)">
+      <div style="width:48px;height:48px;border-radius:50%;overflow:hidden;border:2px solid ${selectedUrl ? '#e50914' : '#444'};background:#222;flex-shrink:0;display:flex;align-items:center;justify-content:center">
+        ${selectedUrl ? `<img src="${selectedUrl.replace(/"/g, '&quot;')}" style="width:100%;height:100%;object-fit:cover">` : `<span style="font-size:22px;color:#666">👤</span>`}
+      </div>
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:bold;color:#fff">${selectedUrl ? 'تم تحديد صورة' : 'لم يتم تحديد صورة'}</div>
+        <div style="font-size:11px;color:#888">${selectedUrl ? 'جاهزة للاعتماد في حسابك' : 'انقر على صورة من الشبكة لاختيارها'}</div>
+      </div>
+      <button type="button" id="confirmAvatarBtn" onclick="window.confirmSelectedAvatar()" ${selectedUrl ? '' : 'disabled'} style="background:${selectedUrl ? 'linear-gradient(135deg, #e50914, #b20710)' : '#262626'};color:${selectedUrl ? '#fff' : '#666'};border:none;padding:12px 20px;border-radius:10px;font-size:14px;font-weight:bold;cursor:${selectedUrl ? 'pointer' : 'not-allowed'};box-shadow:${selectedUrl ? '0 4px 14px rgba(229,9,20,0.4)' : 'none'};transition:all 0.2s ease">
+        اعتماد الصورة
+      </button>
+    </div>
+  `;
+};
+
+window.selectAvatarOption = function(url) {
+  window.selectedAvatarForUser = url;
+  window.renderAvatarPickerPage();
+};
+
+window.confirmSelectedAvatar = async function() {
+  const url = window.selectedAvatarForUser;
+  if (!url) {
+    alert("يرجى تحديد صورة أولاً.");
+    return;
+  }
+  const user = window.currentAuthUser;
+  if (!user) {
+    alert("يرجى تسجيل الدخول أولاً لاعتماد الصورة الشخصية.");
+    return;
+  }
+  const btn = document.getElementById("confirmAvatarBtn");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "⏳ جاري الاعتماد...";
+  }
+
+  try {
+    await updateProfile(user, { photoURL: url });
+    await setDoc(doc(db, "users", user.uid), { photoURL: url }, { merge: true });
+    updateDrawerUserState();
+    updateTopBarAvatar();
+    alert("تم اعتماد وتحديث صورتك الشخصية بنجاح! 🎉");
+    goBack();
+  } catch(e) {
+    console.error("Failed to update avatar:", e);
+    alert("حدث خطأ أثناء اعتماد الصورة: " + e.message);
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "اعتماد الصورة";
+    }
+  }
+};
 
 window.manualRefreshReports = async function() {
   if (!window.isAdminAuthorized()) {

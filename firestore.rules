@@ -82,6 +82,12 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
     
+    // Profile Avatars: Publicly readable for all users, writeable only by Admin
+    match /profile_avatars/{avatarId} {
+      allow read: if true;
+      allow create, delete, update: if isAdmin();
+    }
+    
     // User private data (favorites, my_list, history)
     match /users/{userId}/{document=**} {
       allow read, write: if isAuthenticated() && request.auth.uid == userId;
